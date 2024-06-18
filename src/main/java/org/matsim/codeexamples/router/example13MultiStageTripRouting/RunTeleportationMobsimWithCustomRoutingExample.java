@@ -22,6 +22,8 @@ package org.matsim.codeexamples.router.example13MultiStageTripRouting;
 import java.net.URL;
 import java.util.Map;
 
+import ch.sbb.matsim.config.SwissRailRaptorConfigGroup;
+import ch.sbb.matsim.routing.pt.raptor.SwissRailRaptorModule;
 import com.google.inject.Key;
 import com.google.inject.name.Names;
 import org.matsim.api.core.v01.Coord;
@@ -29,10 +31,13 @@ import org.matsim.api.core.v01.Id;
 import org.matsim.api.core.v01.Scenario;
 import org.matsim.api.core.v01.TransportMode;
 import org.matsim.api.core.v01.network.Link;
+import org.matsim.api.core.v01.population.Person;
+import org.matsim.api.core.v01.population.PlanElement;
 import org.matsim.core.config.Config;
 import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.config.groups.PlanCalcScoreConfigGroup;
 import org.matsim.core.config.groups.PlanCalcScoreConfigGroup.ActivityParams;
+import org.matsim.core.config.groups.PlansCalcRouteConfigGroup;
 import org.matsim.core.controler.AbstractModule;
 import org.matsim.core.controler.Controler;
 import org.matsim.core.controler.OutputDirectoryHierarchy;
@@ -41,6 +46,7 @@ import org.matsim.core.router.MainModeIdentifier;
 import org.matsim.core.router.MainModeIdentifierImpl;
 import org.matsim.core.router.RoutingModule;
 import org.matsim.core.scenario.ScenarioUtils;
+import org.matsim.core.utils.collections.CollectionUtils;
 import org.matsim.core.utils.io.IOUtils;
 import org.matsim.examples.ExamplesUtils;
 import org.matsim.facilities.ActivityFacility;
@@ -56,17 +62,37 @@ public class RunTeleportationMobsimWithCustomRoutingExample {
 		// make sure we get all the log messages in the logfile
 		OutputDirectoryLogging.catchLogEntries();
 		
-		final URL url = IOUtils.extendUrl( ExamplesUtils.getTestScenarioURL( "pt-tutorial" ), "0.config.xml" );;
+		final String url = "/Users/lei/Documents/GitHub/matsim-code-examples/scenarios/pt-tutorial/0.config.xml";
 		
 		// load the config ...
 		final Config config = ConfigUtils.loadConfig( url );
+		SwissRailRaptorConfigGroup srrConfig = new SwissRailRaptorConfigGroup();
+		SwissRailRaptorConfigGroup.ModeMappingForPassengersParameterSet modeMappingForPassengersParameterSet = new SwissRailRaptorConfigGroup.ModeMappingForPassengersParameterSet();
+		modeMappingForPassengersParameterSet.setPassengerMode("train");
+		modeMappingForPassengersParameterSet.setRouteMode("train");
+		srrConfig.addModeMappingForPassengers(modeMappingForPassengersParameterSet);
+		srrConfig.setUseModeMappingForPassengers(true);
+		config.addModule(srrConfig);
+
+		//route modes
+//		String[] modes= {"car", "train"};
+//		config.plansCalcRoute().setNetworkModes(CollectionUtils.stringArrayToSet(modes));
+
+		//sourcing
+		PlanCalcScoreConfigGroup.ModeParams trainmodes = new PlanCalcScoreConfigGroup.ModeParams("train");
+		trainmodes.setMarginalUtilityOfTraveling(0.0);
+		config.planCalcScore().addModeParams(trainmodes);
+
+
 		// ... and add local changes:
 		tuneConfig( config );
+		config.controler().setLastIteration(1);
 		
 		config.controler().setOverwriteFileSetting( OutputDirectoryHierarchy.OverwriteFileSetting.deleteDirectoryIfExists );
 
 		// load the scenario:
 		final Scenario scenario = ScenarioUtils.loadScenario( config );
+
 		
 		// load the controler:
 		final Controler controler = new Controler( scenario );
@@ -77,7 +103,13 @@ public class RunTeleportationMobsimWithCustomRoutingExample {
 					Id.create( "teleport" , ActivityFacility.class),
 					controler.getScenario().getNetwork().getLinks().get( Id.create( "2333", Link.class ) ));
 
+//		final ActivityFacility teleportOntransitStation =
+//				createFacility(
+//						Id.create( "teleportOntransitStation" , ActivityFacility.class),
+//						controler.getScenario().getNetwork().getLinks().get( Id.create( "11", Link.class ) ));
+
 		// now, plug our stuff in
+		controler.addOverridingModule(new SwissRailRaptorModule());
 		controler.addOverridingModule(new AbstractModule() {
 			@Override
 			public void install() {
@@ -87,7 +119,7 @@ public class RunTeleportationMobsimWithCustomRoutingExample {
 								// This allows to automatically adapt to user settings,
 								// including if they are specified at a later stage
 								// in the initialisation process.
-								binder().getProvider(Key.get(RoutingModule.class, Names.named(TransportMode.pt))),
+								binder().getProvider(Key.get(RoutingModule.class, Names.named(TransportMode.train))),
 								scenario.getPopulation().getFactory(),
 								teleport));
 				// we still need to provide a way to identify our trips
@@ -98,13 +130,14 @@ public class RunTeleportationMobsimWithCustomRoutingExample {
 		});
 
 
+
 		// run the controler:
 		controler.run();
 	}
 
 	private static void tuneConfig(final Config config) {
 //		config.getModule( "changeMode" ).addParam( "modes" , "car,pt,"+MyRoutingModule.TELEPORTATION_MAIN_MODE );
-		config.changeMode().setModes( new String[] {"car", "pt", MyRoutingModule.TELEPORTATION_MAIN_MODE} );
+		config.changeMode().setModes( new String[] {"car", "train", MyRoutingModule.TELEPORTATION_MAIN_MODE} );
 		
 		final ActivityParams scoreTelepInteract = new ActivityParams( MyRoutingModule.STAGE );
 		scoreTelepInteract.setTypicalDuration( 2 * 60 );
@@ -116,6 +149,15 @@ public class RunTeleportationMobsimWithCustomRoutingExample {
 		final PlanCalcScoreConfigGroup.ModeParams modeParams = new PlanCalcScoreConfigGroup.ModeParams(
 				MyRoutingModule.TELEPORTATION_LEG_MODE);
 		config.planCalcScore().addModeParams(modeParams);
+
+		config.plansCalcRoute().setNetworkModes(CollectionUtils.stringArrayToSet(new String[] {"car", MyRoutingModule.TELEPORTATION_LEG_MODE}));
+		config.plansCalcRoute().clearTeleportedModeParams();
+		{
+			PlansCalcRouteConfigGroup.TeleportedModeParams params = new PlansCalcRouteConfigGroup.TeleportedModeParams("walk");
+			params.setTeleportedModeSpeed(5./3.6);
+			params.setBeelineDistanceFactor(1.3);
+			config.plansCalcRoute().addTeleportedModeParams(params);
+		}
 	}
 
 	private static ActivityFacility createFacility(
